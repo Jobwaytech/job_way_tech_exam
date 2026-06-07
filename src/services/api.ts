@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:5000/api";
+const API_URL = "https://job-way-tech-exam.onrender.com/api";
 
 export const authAPI = {
   register: (data: any) =>

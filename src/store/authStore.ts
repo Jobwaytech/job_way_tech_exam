@@ -22,7 +22,7 @@ interface AuthState {
   setUserData: (userData: UserData | null) => void;
 }
 
-const API_URL = "http://localhost:5000/api";
+const API_URL = "https://job-way-tech-exam.onrender.com/api";
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
