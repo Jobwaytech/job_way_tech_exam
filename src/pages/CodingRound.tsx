@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getAuth } from "firebase/auth";
-import { db, getServerTime } from "../lib/firebase";
-import { collection, getDocs, setDoc, doc, getDoc } from "firebase/firestore";
 import { motion } from "framer-motion";
 import Editor from "@monaco-editor/react";
+import { dataAPI } from "../services/api";
+import { useAuthStore } from "../store/authStore";
 import {
   Play,
   CheckCircle,
@@ -123,8 +122,8 @@ declare global {
 }
 
 const CodingRoundPage = () => {
-  const auth = getAuth();
-  const uid = auth.currentUser?.uid || null;
+  const user = useAuthStore((state) => state.user);
+  const uid = user?.uid || null;
 
   const [questions, setQuestions] = useState<Question[]>([]);
   const [idx, setIdx] = useState(0);
@@ -180,31 +179,43 @@ const CodingRoundPage = () => {
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
   const warnShownRef = useRef(false);
 
+  const getResponse = async () => {
+    if (!uid) return null;
+    const responses = await dataAPI.list("responses");
+    return responses.find((response: any) => response.uid === uid) || null;
+  };
+
+  const saveResponse = async (data: any) => {
+    if (!uid) return null;
+    const existing = await getResponse();
+    if (existing?._id || existing?.id) {
+      await dataAPI.update("responses", existing._id || existing.id, data);
+      return { ...existing, ...data };
+    }
+    return dataAPI.create("responses", { uid, userId: uid, ...data });
+  };
+
   useEffect(() => {
     const checkRoundCompletion = async () => {
-      const user = auth.currentUser;
-      if (!user) return;
+      if (!uid) return;
 
-      const roundDoc = await getDoc(doc(db, "roundCompletion", user.uid));
-      if (roundDoc.exists() && roundDoc.data().completed) {
+      const response = await getResponse();
+      if (response?.round2Completed) {
         setRoundCompleted(true);
       }
     };
 
     checkRoundCompletion();
-  }, []);
+  }, [uid]);
 
   // Load questions
   useEffect(() => {
     const loadQuestions = async () => {
       if (!uid) return;
 
-      const [snaps, now] = await Promise.all([
-        getDocs(collection(db, "questions")),
-        getServerTime(),
-      ]);
-      const list = snaps.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+      const now = new Date();
+      const list = (await dataAPI.list("questions"))
+        .map((q: any) => ({ ...q, id: q.id || q._id }))
         .filter((q: any) => {
           if (q.type !== "code") return false;
           const assigned = Array.isArray(q.assignedTo) ? q.assignedTo : [];
@@ -246,11 +257,10 @@ const CodingRoundPage = () => {
       }
       setCodeMap(initialCode);
 
-      const submittedSnaps = await getDocs(
-        collection(db, "responses", uid, "round2"),
-      );
-      if (!submittedSnaps.empty) {
-        const submitted = new Set(submittedSnaps.docs.map((doc) => doc.id));
+      const response = await getResponse();
+      const round2 = response?.round2 || {};
+      if (Object.keys(round2).length > 0) {
+        const submitted = new Set<string>(Object.keys(round2));
         setSubmittedQuestions(submitted);
         if (submitted.size === list.length) {
           setRoundCompleted(true);
@@ -555,7 +565,10 @@ out, err
       const percentage =
         totalCount > 0 ? Math.round((passedCount / totalCount) * 100) : 0;
 
-      await setDoc(doc(db, "responses", uid, "round2", currentQuestion.id), {
+      const existing = await getResponse();
+      const nextRound2 = {
+        ...(existing?.round2 || {}),
+        [currentQuestion.id]: {
         code,
         language: langId,
         result: resultText,
@@ -566,6 +579,12 @@ out, err
         submittedAt: new Date(),
         examViolations: violations,
         durationSec: timerSec,
+        },
+      };
+      const completed = Object.keys(nextRound2).length >= questions.length;
+      await saveResponse({
+        round2: nextRound2,
+        round2Completed: completed,
       });
 
       setPerTestResults(collected);
@@ -574,6 +593,9 @@ out, err
         next.add(currentQuestion.id);
         return next;
       });
+      if (completed) {
+        setRoundCompleted(true);
+      }
 
       if (soundEnabled) {
         const audio = new Audio(

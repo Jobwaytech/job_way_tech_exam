@@ -1,11 +1,3 @@
-import {
-  addDoc,
-  collection,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-} from "firebase/firestore";
 import { motion } from "framer-motion";
 import {
   BookOpen,
@@ -18,7 +10,7 @@ import {
   Users
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { db } from "../lib/firebase";
+import { dataAPI } from "../services/api";
 
 const Dashboard = () => {
   const [type, setType] = useState<"mcq" | "code">("mcq");
@@ -72,35 +64,27 @@ const Dashboard = () => {
     const fetchDashboardData = async () => {
       setLoading(true);
       try {
-        // Fetch users from both employees collection and Firebase Auth users
-        const [employeesSnap, authUsersSnap] = await Promise.all([
-          getDocs(collection(db, "employees")),
-          getDocs(collection(db, "users")),
+        // Fetch users from both employees collection and auth users
+        const [employeesList, authUsersList] = await Promise.all([
+          dataAPI.list("employees"),
+          dataAPI.list("users"),
         ]);
 
-        const employeesList = employeesSnap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        const authUsersList = authUsersSnap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-
-        // Build a map by email to ensure we always have a real Auth UID
+        // Build a map by email to avoid duplicate display rows.
         const byEmail: Record<string, any> = {};
 
-        // Seed from auth users collection (these ids are real Firebase Auth UIDs)
+        // Seed from auth users collection.
         (authUsersList as any[]).forEach((u: any) => {
           if (!u?.email) return;
+          const userId = u.uid || u._id || u.id;
           byEmail[u.email] = {
-            id: u.id,
+            id: userId,
             email: u.email,
             name: u.fullName || u.email,
             title: u.role || "Member",
             department: u.department || "",
             status: u.status || "active",
-            authUid: u.id,
+            authUid: userId,
           };
         });
 
@@ -119,10 +103,9 @@ const Dashboard = () => {
               status: emp.status || byEmail[emp.email].status,
             };
           } else if (emp?.email) {
-            // If no auth record exists for this email, include only for display, but DO NOT use employee doc id as authUid
-            // This avoids assigning questions to a non-auth UID
+            const employeeId = emp.uid || emp._id || emp.id;
             byEmail[emp.email] = {
-              id: emp.id,
+              id: employeeId,
               email: emp.email,
               name: emp.name || emp.email,
               title: emp.title || "Employee",
@@ -131,7 +114,7 @@ const Dashboard = () => {
               phone: emp.phone,
               photo: emp.photo,
               status: emp.status || "inactive",
-              authUid: undefined,
+              authUid: employeeId,
             };
           }
         });
@@ -141,29 +124,25 @@ const Dashboard = () => {
         setTotalUsers(combinedUsers.length);
 
         // Fetch questions
-        const questionsSnap = await getDocs(collection(db, "questions"));
-        setTotalQuestions(questionsSnap.docs.length);
+        const questions = await dataAPI.list("questions");
+        setTotalQuestions(questions.length);
 
         // Fetch responses to calculate completed/active exams
-        const responsesSnap = await getDocs(collection(db, "responses"));
-        const completedCount = responsesSnap.docs.length;
+        const responses = await dataAPI.list("responses");
+        const completedCount = responses.length;
         const activeCount = Math.max(0, combinedUsers.length - completedCount);
         setCompletedExams(completedCount);
         setActiveExams(activeCount);
 
         // Fetch recent activities
         try {
-          const activitiesSnap = await getDocs(
-            query(
-              collection(db, "activity_logs"),
-              orderBy("created_at", "desc"),
-              limit(5),
-            ),
-          );
-          const activities = activitiesSnap.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          }));
+          const activities = (await dataAPI.list("activity_logs"))
+            .sort(
+              (a: any, b: any) =>
+                new Date(b.created_at || b.createdAt || 0).getTime() -
+                new Date(a.created_at || a.createdAt || 0).getTime(),
+            )
+            .slice(0, 5);
           setRecentActivities(activities);
         } catch (error) {
           console.log("No activity logs found, using empty array");
@@ -174,8 +153,8 @@ const Dashboard = () => {
         setPreviousMetrics({
           questions: Math.max(
             0,
-            questionsSnap.docs.length -
-              Math.floor(questionsSnap.docs.length * 0.1),
+            questions.length -
+              Math.floor(questions.length * 0.1),
           ),
           users: Math.max(
             0,
@@ -216,7 +195,6 @@ const Dashboard = () => {
     if (selectAll) {
       setSelectedUsers([]);
     } else {
-      // Only include users that have a valid authUid (actual Firebase Auth user)
       setSelectedUsers(
         users.filter((u: any) => !!u.authUid).map((u: any) => u.authUid),
       );
@@ -344,7 +322,7 @@ const Dashboard = () => {
       if (type === "mcq") {
         await Promise.all(
           mcqQuestions.map((q) =>
-            addDoc(collection(db, "questions"), {
+            dataAPI.create("questions", {
               ...commonSavedData,
               title: q.title,
               description: q.description,
@@ -356,7 +334,7 @@ const Dashboard = () => {
       } else {
         await Promise.all(
           codingQuestions.map((q) =>
-            addDoc(collection(db, "questions"), {
+            dataAPI.create("questions", {
               ...commonSavedData,
               title: q.title,
               description: q.description,
@@ -385,7 +363,7 @@ const Dashboard = () => {
 
       // Log activity
       try {
-        await addDoc(collection(db, "activity_logs"), {
+        await dataAPI.create("activity_logs", {
           action:
             type === "mcq"
               ? `New MCQ questions created`

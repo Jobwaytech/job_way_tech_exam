@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { collection, getDocs, doc, setDoc, getDoc } from "firebase/firestore";
-import { db, getServerTime } from "../lib/firebase";
-import { getAuth } from "firebase/auth";
+import { dataAPI } from "../services/api";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { useRouter } from "next/router";
+import { useAuthStore } from "../store/authStore";
 import {
   CheckCircle,
   Clock,
@@ -24,8 +23,7 @@ import {
 } from "lucide-react";
 
 const MCQRoundPage = () => {
-  const auth = getAuth();
-  const user = auth.currentUser;
+  const user = useAuthStore((state) => state.user);
   const router = useRouter();
 
   const [questions, setQuestions] = useState<any[]>([]);
@@ -48,23 +46,36 @@ const MCQRoundPage = () => {
   const warnShownRef = useRef(false);
   const timerRef = React.useRef<number | null>(null);
 
-  // Save draft to Firestore
+  const getResponse = async () => {
+    if (!user?.uid) return null;
+    const responses = await dataAPI.list("responses");
+    return (
+      responses.find((response: any) => response.uid === user.uid) || null
+    );
+  };
+
+  const saveResponse = async (data: any) => {
+    if (!user?.uid) return;
+    const existing = await getResponse();
+    if (existing?._id || existing?.id) {
+      await dataAPI.update("responses", existing._id || existing.id, data);
+      return;
+    }
+    await dataAPI.create("responses", { uid: user.uid, userId: user.uid, ...data });
+  };
+
+  // Save draft to MongoDB
   const saveDraft = async (draft: any) => {
     if (!user) return;
-    await setDoc(
-      doc(db, "responses", user.uid),
-      { round1Draft: draft },
-      { merge: true },
-    );
+    await saveResponse({ round1Draft: draft });
   };
 
   // On mount, check for submission and restore draft if present
   useEffect(() => {
     const checkAlreadySubmitted = async () => {
       if (!user) return;
-      const snap = await getDoc(doc(db, "responses", user.uid));
-      if (snap.exists()) {
-        const data = snap.data();
+      const data = await getResponse();
+      if (data) {
         if (data?.round1Submitted) {
           setSubmitted(true);
         } else if (data?.round1Draft) {
@@ -99,22 +110,28 @@ const MCQRoundPage = () => {
     const fetchQuestions = async () => {
       if (!user) return;
       // Fetch all questions and filter client-side: include mcq assigned to user OR with assignedTo missing/empty (global)
-      const now = await getServerTime();
-      const qSnap = await getDocs(collection(db, "questions"));
-      const list = qSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }) as any)
-        .filter((q: any) => {
-          if (q.type !== "mcq") return false;
-          const assigned = Array.isArray(q.assignedTo) ? q.assignedTo : [];
-          const hasAssignment = assigned.length > 0;
-          const inAssignees = !hasAssignment || assigned.includes(user.uid);
-          const startOk =
-            !q.startAt || (q.startAt?.toDate?.() || new Date(q.startAt)) <= now;
-          const endOk =
-            !q.endAt || (q.endAt?.toDate?.() || new Date(q.endAt)) >= now;
-          return inAssignees && startOk && endOk;
-        });
-      setQuestions(list);
+      const now = new Date();
+
+const data = (await dataAPI.list("questions")).map((q: any) => ({
+  ...q,
+  id: q.id || q._id,
+}));
+
+const list = data.filter((q: any) => {
+  if (q.type !== "mcq") return false;
+
+  const assigned = Array.isArray(q.assignedTo) ? q.assignedTo : [];
+  const hasAssignment = assigned.length > 0;
+  const inAssignees = !hasAssignment || assigned.includes(user.uid);
+
+  const startOk =
+    !q.startAt || new Date(q.startAt) <= now;
+
+  const endOk =
+    !q.endAt || new Date(q.endAt) >= now;
+
+  return inAssignees && startOk && endOk;
+});      setQuestions(list);
 
       // Setup countdown to earliest end time among loaded questions (if any)
       const ends: number[] = list
@@ -177,7 +194,6 @@ const MCQRoundPage = () => {
             );
             audio.play().catch(() => {});
           }
-          reEnterFullscreen();
         } else {
           setWarningMsg(
             "Exam rejected due to excessive violations (5 reached).",
@@ -259,8 +275,8 @@ const MCQRoundPage = () => {
   };
 
   const handleStart = async () => {
-    setStarted(true);
     await reEnterFullscreen();
+    setStarted(true);
   };
 
   const handleSelect = (qid: string, opt: string) => {
@@ -315,22 +331,18 @@ const MCQRoundPage = () => {
     const totalScore = correctCount;
 
     try {
-      await setDoc(
-        doc(db, "responses", user.uid),
-        {
-          round1: {
-            submittedAt: new Date(),
-            score: totalScore,
-            correct: correctCount,
-            wrong: wrongCount,
-            answers: answerDetails,
-            examDuration: timerSec,
-            violations: violations,
-          },
-          round1Submitted: true,
+      await saveResponse({
+        round1: {
+          submittedAt: new Date(),
+          score: totalScore,
+          correct: correctCount,
+          wrong: wrongCount,
+          answers: answerDetails,
+          examDuration: timerSec,
+          violations: violations,
         },
-        { merge: true },
-      );
+        round1Submitted: true,
+      });
 
       setSubmitted(true);
       // await exitFullscreen();
@@ -357,16 +369,12 @@ const MCQRoundPage = () => {
     if (!user) return;
     setSubmitted(true);
 
-    await setDoc(
-      doc(db, "responses", user.uid),
-      {
-        round1Submitted: true,
-        round1Rejected: true,
-        rejectedAt: new Date(),
-        violations: violations,
-      },
-      { merge: true },
-    );
+    await saveResponse({
+      round1Submitted: true,
+      round1Rejected: true,
+      rejectedAt: new Date(),
+      violations: violations,
+    });
 
     await exitFullscreen();
     router.push("/");

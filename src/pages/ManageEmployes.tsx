@@ -7,9 +7,7 @@ import {
   Paper,
   CircularProgress,
 } from "@mui/material";
-import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, Timestamp } from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { authAPI, dataAPI } from "../services/api";
 
 const AddUserPage = () => {
   const [name, setName] = useState("");
@@ -23,27 +21,31 @@ const AddUserPage = () => {
       return;
     }
 
-    const auth = getAuth();
     setLoading(true);
     setStatus("");
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        gmail,
-        "123456", // default password
-      );
-      const uid = userCredential.user.uid;
+      const registered = await authAPI.register({
+        fullName: name,
+        email: gmail,
+        password: "123456",
+        role: "user",
+      });
+      if (registered?.message && !registered?.user) {
+        throw new Error(registered.message);
+      }
+
+      const uid = registered?.user?.uid || registered?.user?._id;
 
       const userData = {
         name,
         email: gmail,
         uid,
         userId: uid,
-        createdAt: Timestamp.now(),
+        createdAt: new Date(),
       };
 
-      await setDoc(doc(db, "employees", uid), userData);
+      await dataAPI.create("employees", userData);
 
       setStatus("✅ User added successfully!");
       setName("");

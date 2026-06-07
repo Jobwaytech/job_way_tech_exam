@@ -1,16 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { useAuthStore } from "../store/authStore";
-import { db } from "../lib/firebase";
-import {
-  collection,
-  addDoc,
-  updateDoc,
-  doc,
-  getDocs,
-  serverTimestamp,
-  query,
-  where,
-} from "firebase/firestore";
 import { motion } from "framer-motion";
 import {
   Users,
@@ -30,6 +19,11 @@ import {
   ChevronRight,
 } from "lucide-react";
 import toast from "react-hot-toast";
+import { dataAPI } from "../services/api";
+
+const withId = (item: any) => ({ ...item, id: item.id || item._id || item.uid });
+
+const toDate = (value: any) => value?.toDate?.() || new Date(value);
 
 // Define interfaces
 interface Question {
@@ -123,8 +117,7 @@ const ListeningRound: React.FC = () => {
 
   const fetchEmployees = async () => {
     try {
-      const snap = await getDocs(collection(db, "employees"));
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const data = (await dataAPI.list("employees")).map(withId);
       setEmployees(data);
     } catch (error) {
       console.error("Error fetching employees:", error);
@@ -136,18 +129,15 @@ const ListeningRound: React.FC = () => {
     if (!user) return;
 
     try {
-      const scoresQuery = query(
-        collection(db, "listeningScores"),
-        where("userId", "==", user.uid),
-        where("testId", "==", testId),
-      );
-      const scoresSnap = await getDocs(scoresQuery);
+      const scores = (await dataAPI.list("listeningScores"))
+        .map(withId)
+        .filter(
+          (score: any) => score.userId === user.uid && score.testId === testId,
+        );
 
-      if (!scoresSnap.empty) {
-        const doc = scoresSnap.docs[0];
-        const scoreData = doc.data() as Omit<ListeningScore, "id">;
+      if (scores.length > 0) {
+        const scoreData = scores[0] as ListeningScore;
         setExistingScore({
-          id: doc.id,
           ...scoreData,
           hasPlayedAudio: scoreData.hasPlayedAudio || false,
         });
@@ -166,18 +156,17 @@ const ListeningRound: React.FC = () => {
 
   const fetchTests = async () => {
     try {
-      const snap = await getDocs(collection(db, "LISTENINGROUND"));
-      const tests: Test[] = snap.docs.map((d) => ({
-        id: d.id,
-        title: d.data().title || "",
-        description: d.data().description || "",
-        instructions: d.data().instructions || "",
-        paragraphSets: d.data().paragraphSets || [],
-        assigned: d.data().assigned || [],
-        startAt: d.data().startAt,
-        endAt: d.data().endAt,
-        status: d.data().status || "active",
-        createdAt: d.data().createdAt,
+      const tests: Test[] = (await dataAPI.list("LISTENINGROUND")).map((d: any) => ({
+        id: d.id || d._id,
+        title: d.title || "",
+        description: d.description || "",
+        instructions: d.instructions || "",
+        paragraphSets: d.paragraphSets || [],
+        assigned: d.assigned || [],
+        startAt: d.startAt,
+        endAt: d.endAt,
+        status: d.status || "active",
+        createdAt: d.createdAt,
       }));
       setExistingTests(tests);
 
@@ -187,8 +176,8 @@ const ListeningRound: React.FC = () => {
           (test) =>
             test.assigned.includes(userEmail) &&
             test.status === "active" &&
-            new Date() >= test.startAt.toDate() &&
-            new Date() <= test.endAt.toDate(),
+            new Date() >= toDate(test.startAt) &&
+            new Date() <= toDate(test.endAt),
         );
 
         if (assignedTest) {
@@ -233,19 +222,19 @@ const ListeningRound: React.FC = () => {
       }
     };
 
-    // Save hasPlayedAudio to Firebase
+    // Save hasPlayedAudio to MongoDB
     if (user && assignedTest && !existingScore?.hasPlayedAudio) {
       try {
-        await addDoc(collection(db, "listeningScores"), {
+        const created = await dataAPI.create("listeningScores", {
           userId: user.uid,
           userEmail: user.email,
           testId: assignedTest.id,
           testTitle: assignedTest.title,
           hasPlayedAudio: true,
-          startedAt: serverTimestamp(),
+          startedAt: new Date(),
         });
         setExistingScore({
-          id: "",
+          id: created?.id || created?._id || "",
           userId: user.uid,
           userEmail: user.email || "",
           testId: assignedTest.id,
@@ -328,17 +317,14 @@ const ListeningRound: React.FC = () => {
         score,
         total: totalQuestions,
         percentage,
-        completedAt: serverTimestamp(),
+        completedAt: new Date(),
         hasPlayedAudio: existingScore?.hasPlayedAudio || true,
       };
 
       if (existingScore && !existingScore.completedAt) {
-        await updateDoc(
-          doc(db, "listeningScores", existingScore.id),
-          scoreData,
-        );
+        await dataAPI.update("listeningScores", existingScore.id, scoreData);
       } else {
-        await addDoc(collection(db, "listeningScores"), scoreData);
+        await dataAPI.create("listeningScores", scoreData);
       }
 
       setTestCompleted(true);
@@ -369,7 +355,7 @@ const ListeningRound: React.FC = () => {
     setLoading(true);
     try {
       if (editTestId) {
-        await updateDoc(doc(db, "LISTENINGROUND", editTestId), {
+        await dataAPI.update("LISTENINGROUND", editTestId, {
           title,
           description,
           instructions,
@@ -377,17 +363,17 @@ const ListeningRound: React.FC = () => {
           assigned: selectedEmployees,
           startAt: new Date(startAt),
           endAt: new Date(endAt),
-          updatedAt: serverTimestamp(),
+          updatedAt: new Date(),
         });
         toast.success("Test updated successfully!");
       } else {
-        await addDoc(collection(db, "LISTENINGROUND"), {
+        await dataAPI.create("LISTENINGROUND", {
           title,
           description,
           instructions,
           paragraphSets,
           assigned: selectedEmployees,
-          createdAt: serverTimestamp(),
+          createdAt: new Date(),
           status: "active",
           startAt: new Date(startAt),
           endAt: new Date(endAt),
@@ -739,8 +725,8 @@ CORRECT: [A/B/C/D]
             {existingScore && existingScore.completedAt && (
               <div className="text-sm text-gray-500 dark:text-gray-400 mb-4">
                 Submitted on:{" "}
-                {existingScore.completedAt.toDate().toLocaleDateString()} at{" "}
-                {existingScore.completedAt.toDate().toLocaleTimeString()}
+                {toDate(existingScore.completedAt).toLocaleDateString()} at{" "}
+                {toDate(existingScore.completedAt).toLocaleTimeString()}
               </div>
             )}
 

@@ -1,13 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { db } from "../lib/firebase";
-import {
-  collection,
-  addDoc,
-  updateDoc,
-  doc,
-  getDocs,
-  serverTimestamp,
-} from "firebase/firestore";
 import { motion } from "framer-motion";
 import {
   Users,
@@ -23,6 +14,15 @@ import {
   Sparkles,
   ChevronDown,
 } from "lucide-react";
+import { dataAPI } from "../services/api";
+
+const withId = (item: any) => ({ ...item, id: item.id || item._id || item.uid });
+
+const toDateTimeInput = (value: any) => {
+  if (!value) return "";
+  const date = value?.toDate?.() || new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 16);
+};
 
 const CommunicationRound: React.FC = () => {
   const [title, setTitle] = useState("");
@@ -51,12 +51,11 @@ const CommunicationRound: React.FC = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [selectedParas, setSelectedParas] = useState<number[]>([]);
 
-  // Fetch employees from Firestore
+  // Fetch employees from MongoDB
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
-        const snap = await getDocs(collection(db, "employees"));
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const data = (await dataAPI.list("employees")).map(withId);
         setEmployees(data);
       } catch (error) {
         console.error("Error fetching employees:", error);
@@ -67,8 +66,7 @@ const CommunicationRound: React.FC = () => {
 
   const fetchTests = async () => {
     try {
-      const snap = await getDocs(collection(db, "COMMUNICATIONTEST"));
-      const tests = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const tests = (await dataAPI.list("COMMUNICATIONTEST")).map(withId);
       setExistingTests(tests);
     } catch (error) {
       console.error("Error fetching tests:", error);
@@ -114,7 +112,7 @@ const CommunicationRound: React.FC = () => {
     setLoading(true);
     try {
       if (editTestId) {
-        await updateDoc(doc(db, "COMMUNICATIONTEST", editTestId), {
+        await dataAPI.update("COMMUNICATIONTEST", editTestId, {
           title,
           description,
           instructions,
@@ -122,17 +120,17 @@ const CommunicationRound: React.FC = () => {
           assigned: selectedEmployees,
           ...(startAt ? { startAt: new Date(startAt) } : {}),
           ...(endAt ? { endAt: new Date(endAt) } : {}),
-          updatedAt: serverTimestamp(),
+          updatedAt: new Date(),
         });
         alert("Test updated successfully!");
       } else {
-        await addDoc(collection(db, "COMMUNICATIONTEST"), {
+        await dataAPI.create("COMMUNICATIONTEST", {
           title,
           description,
           instructions,
           questions: questions.filter((q) => q.trim()),
           assigned: selectedEmployees,
-          createdAt: serverTimestamp(),
+          createdAt: new Date(),
           status: "active",
           ...(startAt ? { startAt: new Date(startAt) } : {}),
           ...(endAt ? { endAt: new Date(endAt) } : {}),
@@ -188,8 +186,8 @@ const CommunicationRound: React.FC = () => {
     );
     setSelectedEmployees(test.assigned || []);
     setEditTestId(test.id);
-    setStartAt(test.startAt?.toDate?.()?.toISOString().slice(0, 16) || "");
-    setEndAt(test.endAt?.toDate?.()?.toISOString().slice(0, 16) || "");
+    setStartAt(toDateTimeInput(test.startAt));
+    setEndAt(toDateTimeInput(test.endAt));
     setShowCreateForm(true);
   };
 

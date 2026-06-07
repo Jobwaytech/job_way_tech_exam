@@ -1,16 +1,6 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState, useMemo, useCallback } from "react";
-import {
-  collection,
-  getDocs,
-  doc,
-  getDoc,
-  query,
-  where,
-  deleteDoc,
-} from "firebase/firestore";
-import { db } from "../lib/firebase";
 import { motion } from "framer-motion";
 import {
   Trophy,
@@ -28,6 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { debounce } from "lodash";
+import { dataAPI } from "../services/api";
 
 // Enhanced TypeScript interfaces
 interface CommunicationResponse {
@@ -318,41 +309,38 @@ const ViewScores = () => {
   // Updated fetchUserData with better fallback naming and unknown flag
   const fetchUserData = async (uid: string): Promise<User | null> => {
     try {
-      const [userSnap, empSnap, round2Snap, commSnap, listeningSnap, resSnap] =
+      const [allUsers, employees, responses, allComm, allListening] =
         await Promise.all([
-          getDoc(doc(db, "users", uid)).catch(() => null),
-          getDoc(doc(db, "employees", uid)).catch(() => null),
-          getDocs(collection(db, "responses", uid, "round2")).catch(() => null),
-          getDocs(
-            query(
-              collection(db, "communicationResponse"),
-              where("userId", "==", uid),
-            ),
-          ).catch(() => null),
-          getDocs(
-            query(
-              collection(db, "listeningScores"),
-              where("userId", "==", uid),
-            ),
-          ).catch(() => null),
-          getDoc(doc(db, "responses", uid)).catch(() => null),
+          dataAPI.list("users").catch(() => []),
+          dataAPI.list("employees").catch(() => []),
+          dataAPI.list("responses").catch(() => []),
+          dataAPI.list("communicationResponse").catch(() => []),
+          dataAPI.list("listeningScores").catch(() => []),
         ]);
 
-      const data = resSnap?.exists() ? resSnap.data() : {};
+      const userData = allUsers.find(
+        (u: any) => u.uid === uid || u._id === uid || u.id === uid,
+      );
+      const empData = employees.find(
+        (emp: any) => emp.uid === uid || emp._id === uid || emp.id === uid,
+      );
+      const data =
+        responses.find((response: any) => response.uid === uid) || {};
+      const commRows = allComm.filter((item: any) => item.userId === uid);
+      const listeningRows = allListening.filter((item: any) => item.userId === uid);
       if (!data || Object.keys(data).length === 0) return null;
 
       let displayName = `User-${uid.substring(0, 8)}`; // Better fallback with UID prefix
       let displayEmail = `${uid.substring(0, 8)}@deleted.example.com`;
-      const isUnknown = !userSnap?.exists() && !empSnap?.exists();
+      const isUnknown = !userData && !empData;
 
-      if (userSnap?.exists()) {
-        const u = userSnap.data() as any;
-        displayName = u.fullName || u.name || u.email || displayName;
-        displayEmail = u.email || displayEmail;
-      } else if (empSnap?.exists()) {
-        const emp = empSnap.data() as any;
-        displayName = emp.name || displayName;
-        displayEmail = emp.email || displayEmail;
+      if (userData) {
+        displayName =
+          userData.fullName || userData.name || userData.email || displayName;
+        displayEmail = userData.email || displayEmail;
+      } else if (empData) {
+        displayName = empData.name || empData.fullName || displayName;
+        displayEmail = empData.email || displayEmail;
       }
 
       const round1: Round1 = {
@@ -374,12 +362,12 @@ const ViewScores = () => {
         total: 0,
         solutions: [],
       };
-      if (round2Snap) {
-        round2.solutions = round2Snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as any),
-          passed: Number(d.data().passed) || 0,
-          total: Number(d.data().total) || 0,
+      if (data.round2) {
+        round2.solutions = Object.entries(data.round2).map(([id, value]: any) => ({
+          id,
+          ...value,
+          passed: Number(value.passed) || 0,
+          total: Number(value.total) || 0,
         }));
         round2.passed = round2.solutions.reduce((sum, s) => sum + s.passed, 0);
         round2.total = round2.solutions.reduce((sum, s) => sum + s.total, 0);
@@ -396,10 +384,9 @@ const ViewScores = () => {
         percentage: 0,
         responseCount: 0,
       };
-      if (commSnap) {
+      if (commRows.length > 0) {
         const accuracyScores: number[] = [];
-        commSnap.forEach((doc) => {
-          const d = doc.data() as CommunicationResponse;
+        commRows.forEach((d: CommunicationResponse) => {
           round3.responseCount++;
           if (d.score !== undefined && !isNaN(Number(d.score))) {
             const score = Number(d.score);
@@ -434,10 +421,9 @@ const ViewScores = () => {
         testCount: 0,
         avgScore: 0,
       };
-      if (listeningSnap) {
+      if (listeningRows.length > 0) {
         const percentages: number[] = [];
-        listeningSnap.forEach((doc) => {
-          const d = doc.data();
+        listeningRows.forEach((d: any) => {
           round4.testCount++;
           const score = Number(d.score) || 0;
           const total = Number(d.total) || 0;
@@ -509,23 +495,27 @@ const ViewScores = () => {
       return;
     setLoading(true);
     try {
-      const resSnap = await getDocs(collection(db, "responses"));
-      const deletePromises = resSnap.docs.map(async (res) => {
-        const uid = res.id;
-        const [userSnap, empSnap] = await Promise.all([
-          getDoc(doc(db, "users", uid)).catch(() => null),
-          getDoc(doc(db, "employees", uid)).catch(() => null),
-        ]);
-        if (!userSnap?.exists() && !empSnap?.exists()) {
-          await deleteDoc(doc(db, "responses", uid));
-          // Optionally delete subcollections (uncomment if needed)
-          // await deleteCollection(db, "responses", uid, "round2");
-          // await deleteCollection(db, "communicationResponse", uid); // Requires custom deleteCollection function
+      const [responses, allUsers, employees] = await Promise.all([
+        dataAPI.list("responses"),
+        dataAPI.list("users"),
+        dataAPI.list("employees"),
+      ]);
+      const deletePromises = responses.map(async (res: any) => {
+        const uid = res.uid || res.userId;
+        const hasProfile =
+          allUsers.some((u: any) => u.uid === uid || u._id === uid || u.id === uid) ||
+          employees.some(
+            (emp: any) => emp.uid === uid || emp._id === uid || emp.id === uid,
+          );
+        if (!hasProfile) {
+          await dataAPI.remove("responses", res._id || res.id);
         }
       });
       await Promise.all(deletePromises);
       const updatedUsers = (
-        await Promise.all(resSnap.docs.map((res) => fetchUserData(res.id)))
+        await Promise.all(
+          responses.map((res: any) => fetchUserData(res.uid || res.userId)),
+        )
       ).filter((u): u is User => u !== null);
       setUsers(updatedUsers);
       alert("Cleanup complete!");
@@ -542,8 +532,10 @@ const ViewScores = () => {
       setLoading(true);
       setError(null);
       try {
-        const resSnap = await getDocs(collection(db, "responses"));
-        const userPromises = resSnap.docs.map((res) => fetchUserData(res.id));
+        const responses = await dataAPI.list("responses");
+        const userPromises = responses.map((res: any) =>
+          fetchUserData(res.uid || res.userId),
+        );
         const userList = (await Promise.all(userPromises)).filter(
           (user): user is User => user !== null,
         );
@@ -562,24 +554,21 @@ const ViewScores = () => {
     if (selectedUser) {
       const fetchUserDetails = async () => {
         try {
-          const [commSnap, listeningSnap] = await Promise.all([
-            getDocs(
-              query(
-                collection(db, "communicationResponse"),
-                where("userId", "==", selectedUser.uid),
+          const [commRows, listeningRows] = await Promise.all([
+            dataAPI
+              .list("communicationResponse")
+              .then((rows) =>
+                rows.filter((row: any) => row.userId === selectedUser.uid),
               ),
-            ),
-            getDocs(
-              query(
-                collection(db, "listeningScores"),
-                where("userId", "==", selectedUser.uid),
+            dataAPI
+              .list("listeningScores")
+              .then((rows) =>
+                rows.filter((row: any) => row.userId === selectedUser.uid),
               ),
-            ),
           ]);
 
           setCommResponses(
-            commSnap.docs.map((d) => {
-              const data = d.data() as CommunicationResponse;
+            commRows.map((data: CommunicationResponse) => {
               return {
                 ...data,
                 questionIndex: data.questionIndex ?? 0, // Fallback to 0 if undefined
@@ -587,17 +576,17 @@ const ViewScores = () => {
             }),
           );
           setListeningScores(
-            listeningSnap.docs.map((d) => ({
-              id: d.id,
-              userId: String(d.data().userId || selectedUser.uid),
-              testId: String(d.data().testId || ""),
-              testTitle: String(d.data().testTitle || ""),
-              score: Number(d.data().score) || 0,
-              total: Number(d.data().total) || 0,
-              percentage: Number(d.data().percentage) || 0,
-              completedAt: d.data().completedAt ?? null,
-              answers: Array.isArray(d.data().answers) ? d.data().answers : [],
-              userEmail: String(d.data().userEmail || selectedUser.email || ""),
+            listeningRows.map((d: any) => ({
+              id: d.id || d._id,
+              userId: String(d.userId || selectedUser.uid),
+              testId: String(d.testId || ""),
+              testTitle: String(d.testTitle || ""),
+              score: Number(d.score) || 0,
+              total: Number(d.total) || 0,
+              percentage: Number(d.percentage) || 0,
+              completedAt: d.completedAt ?? null,
+              answers: Array.isArray(d.answers) ? d.answers : [],
+              userEmail: String(d.userEmail || selectedUser.email || ""),
             })),
           );
         } catch (error) {

@@ -1,13 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  updateDoc,
-} from "firebase/firestore";
-import { db } from "../lib/firebase";
 import { motion } from "framer-motion";
 import {
   BookOpen,
@@ -23,8 +14,17 @@ import {
   CheckSquare as FilledCheckSquare,
 } from "lucide-react";
 import toast from "react-hot-toast";
+import { dataAPI } from "../services/api";
 
 type Question = any;
+
+const withId = (item: any) => ({ ...item, id: item.id || item._id || item.uid });
+
+const formatDate = (value: any) => {
+  if (!value) return "Unknown";
+  const date = value?.toDate?.() || new Date(value);
+  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
+};
 
 const QuestionBank = () => {
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -48,11 +48,7 @@ const QuestionBank = () => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const qSnap = await getDocs(collection(db, "questions"));
-        const list = qSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Question[];
+        const list = (await dataAPI.list("questions")).map(withId) as Question[];
         setQuestions(list);
 
         // Preload assignees
@@ -63,20 +59,15 @@ const QuestionBank = () => {
           );
         });
         const map: Record<string, { name: string; email: string }> = {};
-        await Promise.all(
-          Array.from(allUids).map(async (uid) => {
-            try {
-              const userSnap = await getDoc(doc(db, "users", uid));
-              if (userSnap.exists()) {
-                const u: any = userSnap.data();
-                map[uid] = {
-                  name: u.fullName || u.name || u.email || "Unknown",
-                  email: u.email || "unknown@example.com",
-                };
-              }
-            } catch {}
-          }),
-        );
+        const allUsers = (await dataAPI.list("users")).map(withId);
+        allUsers.forEach((u: any) => {
+          const uid = u.uid || u.id;
+          if (!uid || !allUids.has(uid)) return;
+          map[uid] = {
+            name: u.fullName || u.name || u.email || "Unknown",
+            email: u.email || "unknown@example.com",
+          };
+        });
         setAssigneeMap(map);
       } catch (e: any) {
         console.error(e);
@@ -91,8 +82,7 @@ const QuestionBank = () => {
   const fetchUsers = async () => {
     try {
       setUserLoading(true);
-      const snap = await getDocs(collection(db, "users"));
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const list = (await dataAPI.list("users")).map(withId);
       setUsers(list);
     } catch (e: any) {
       toast.error("Failed to fetch users");
@@ -116,7 +106,7 @@ const QuestionBank = () => {
     if (!confirm("Delete this question?")) return;
     try {
       setActionLoadingId(id);
-      await deleteDoc(doc(db, "questions", id));
+      await dataAPI.remove("questions", id);
       setQuestions((prev) => prev.filter((q: any) => q.id !== id));
       toast.success("Question deleted");
     } catch (e: any) {
@@ -131,7 +121,7 @@ const QuestionBank = () => {
     if (next == null) return;
     try {
       setActionLoadingId(q.id);
-      await updateDoc(doc(db, "questions", q.id), { title: next });
+      await dataAPI.update("questions", q.id, { title: next });
       setQuestions((prev) =>
         prev.map((it: any) => (it.id === q.id ? { ...it, title: next } : it)),
       );
@@ -145,13 +135,11 @@ const QuestionBank = () => {
 
   const onAssignUser = async (qId: string, userId: string) => {
     try {
-      const qRef = doc(db, "questions", qId);
-      const qSnap = await getDoc(qRef);
-      const qData = qSnap.data();
+      const qData = questions.find((q: any) => q.id === qId);
       const current = Array.isArray(qData?.assignedTo) ? qData.assignedTo : [];
       if (current.includes(userId)) return;
       const updated = [...current, userId];
-      await updateDoc(qRef, { assignedTo: updated });
+      await dataAPI.update("questions", qId, { assignedTo: updated });
       setQuestions((prev) =>
         prev.map((q: any) =>
           q.id === qId ? { ...q, assignedTo: updated } : q,
@@ -279,7 +267,7 @@ const QuestionBank = () => {
           <div className="text-sm">
             Difficulty: {q.difficulty || "-"}
             <br />
-            Created: {q.createdAt?.toDate?.()?.toLocaleString?.() || "Unknown"}
+            Created: {formatDate(q.createdAt)}
           </div>
         </div>
 
@@ -523,8 +511,7 @@ const QuestionBank = () => {
                       <p>Difficulty: {q.difficulty || "-"}</p>
                       <p>
                         Created:{" "}
-                        {q.createdAt?.toDate?.()?.toLocaleString?.() ||
-                          "Unknown"}
+                        {formatDate(q.createdAt)}
                       </p>
                     </div>
                   </div>

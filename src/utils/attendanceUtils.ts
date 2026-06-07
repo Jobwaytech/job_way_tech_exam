@@ -1,5 +1,4 @@
-import { doc, getDoc, setDoc } from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { dataAPI } from "../services/api";
 
 // Parse time like "11:20:28 AM" → Date object
 const parseTimeToDate = (timeStr: string): Date => {
@@ -66,6 +65,7 @@ export const generateMonthlySummary = async (
 
   const [year, month] = yearMonth.split("-").map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
+  const attendanceRows = await dataAPI.list("attendance");
 
   let presentDays = 0,
     halfDays = 0,
@@ -74,14 +74,18 @@ export const generateMonthlySummary = async (
 
   for (let d = 1; d <= daysInMonth; d++) {
     const date = `${yearMonth}-${String(d).padStart(2, "0")}`;
-    const ref = doc(db, "attendance", `${userId}_${date}`);
-    const snap = await getDoc(ref);
+    const data = attendanceRows.find(
+      (row: any) =>
+        row.id === `${userId}_${date}` ||
+        row._id === `${userId}_${date}` ||
+        row.key === `${userId}_${date}` ||
+        (row.userId === userId && row.date === date),
+    );
 
-    if (!snap.exists()) {
+    if (!data) {
       continue;
     }
 
-    const data = snap.data();
     const sessions = data.sessions || [];
 
     const daySeconds = calculateTotalSeconds(sessions);
@@ -114,7 +118,21 @@ export const generateMonthlySummary = async (
     totalHours,
   };
 
-  console.log("📤 Writing to Firestore:", summary);
+  console.log("📤 Writing attendance summary:", summary);
 
-  await setDoc(doc(db, "attendanceSummary", `${userId}_${yearMonth}`), summary);
+  const summaryKey = `${userId}_${yearMonth}`;
+  const existingSummaries = await dataAPI.list("attendanceSummary");
+  const existing = existingSummaries.find(
+    (row: any) =>
+      row.id === summaryKey ||
+      row._id === summaryKey ||
+      row.key === summaryKey ||
+      (row.userId === userId && row.month === yearMonth),
+  );
+
+  if (existing?._id || existing?.id) {
+    await dataAPI.update("attendanceSummary", existing._id || existing.id, summary);
+  } else {
+    await dataAPI.create("attendanceSummary", { key: summaryKey, ...summary });
+  }
 };

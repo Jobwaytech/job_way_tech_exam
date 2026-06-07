@@ -1,9 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   collection,
-  onSnapshot,
   doc,
-  getDoc,
   setDoc,
   addDoc,
   onSnapshot as onSnapshotFirestore,
@@ -23,6 +21,7 @@ import {
   CheckCircle,
   XCircle,
 } from "lucide-react";
+import { dataAPI } from "../services/api";
 
 interface Student {
   uid: string;
@@ -54,30 +53,33 @@ const mcqtesting: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const videoRefs = useRef<Map<string, HTMLVideoElement | null>>(new Map());
 
-  // Fetch all students from Firebase
+  // Fetch all students from MongoDB
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, "users"),
-      async (snapshot) => {
-        const studentsList: Student[] = [];
+    const fetchStudents = async () => {
+      const studentsList: Student[] = [];
+      try {
+        const [users, responses] = await Promise.all([
+          dataAPI.list("users"),
+          dataAPI.list("responses"),
+        ]);
 
-        for (const docSnapshot of snapshot.docs) {
-          const userData = docSnapshot.data();
+        for (const userData of users) {
+          const uid = userData.uid || userData._id || userData.id;
           const student: Student = {
-            uid: docSnapshot.id,
+            uid,
             email: userData.email,
             displayName:
               userData.displayName ||
+              userData.fullName ||
               userData.email?.split("@")[0] ||
               "Unknown",
           };
 
-          try {
-            const responseDoc = await getDoc(
-              doc(db, "responses", docSnapshot.id),
+          const responseData = responses.find(
+            (response: any) =>
+              response.uid === uid || response.userId === uid,
             );
-            if (responseDoc.exists()) {
-              const responseData = responseDoc.data();
+            if (responseData) {
               student.round1Submitted = responseData.round1Submitted;
               student.round1Rejected = responseData.round1Rejected;
               student.examDuration = responseData.round1?.examDuration;
@@ -88,19 +90,19 @@ const mcqtesting: React.FC = () => {
                 responseData.loginViolations ||
                 0;
             }
-          } catch (error) {
-            console.error("Error fetching response data:", error);
-          }
 
           studentsList.push(student);
         }
 
         setStudents(studentsList);
+      } catch (error) {
+        console.error("Error fetching students:", error);
+      } finally {
         setLoading(false);
-      },
-    );
+      }
+    };
 
-    return () => unsubscribe();
+    fetchStudents();
   }, []);
 
   // Initialize and manage WebRTC streams

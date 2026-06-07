@@ -425,6 +425,9 @@ const CameraAuthGate = ({
   const [status, setStatus] = useState<"checking" | "success" | "failed">(
     "checking",
   );
+  const [setupLoading, setSetupLoading] = useState(true);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [permissionError, setPermissionError] = useState(false);
   const [violations, setViolations] = useState(0);
   const [warningMsg, setWarningMsg] = useState<string | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -508,15 +511,36 @@ const CameraAuthGate = ({
 
   // Initialize camera on component mount
   useEffect(() => {
+    let cancelled = false;
+
     const initCamera = async () => {
       // Set callbacks first
       cameraManager.setCallbacks(
         (newViolations) => setViolations(newViolations),
-        (newStatus) => setStatus(newStatus as any),
+        (newStatus) => {
+          if (cancelled) return;
+          const nextStatus = newStatus as "checking" | "success" | "failed";
+          setStatus(nextStatus);
+          if (nextStatus === "success") {
+            setCameraReady(true);
+            setPermissionError(false);
+            setSetupLoading(false);
+          } else if (nextStatus === "failed") {
+            setCameraReady(false);
+            setPermissionError(true);
+            setSetupLoading(false);
+          }
+        },
       );
 
       const success = await cameraManager.startCamera();
+      if (cancelled) return;
       if (success) {
+        setStatus("success");
+        setCameraReady(true);
+        setPermissionError(false);
+        setSetupLoading(false);
+
         // Update media status
         setMediaStatus({
           video: cameraManager.hasVideo(),
@@ -531,35 +555,38 @@ const CameraAuthGate = ({
           videoRef.current.srcObject = cameraManager.getStream();
           videoRef.current.play().catch(console.error);
         }
+      } else {
+        setStatus("failed");
+        setCameraReady(false);
+        setPermissionError(true);
+        setSetupLoading(false);
       }
     };
 
     initCamera();
 
     return () => {
+      cancelled = true;
       // Don't stop camera here - let it continue streaming
       console.log("[CameraAuth] Component unmounting, but camera continues...");
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!setupLoading || cameraReady || status !== "checking") return;
+
+    const timer = window.setTimeout(() => {
+      setSetupLoading(false);
+    }, 5000);
+
+    return () => window.clearTimeout(timer);
+  }, [setupLoading, cameraReady, status]);
 
   // Update video element when stream becomes available
   useEffect(() => {
     if (videoRef.current && cameraManager.getStream()) {
       videoRef.current.srcObject = cameraManager.getStream();
       videoRef.current.play().catch(console.error);
-    }
-  }, [status]);
-
-  // Trigger fullscreen automatically when camera authentication is successful
-  useEffect(() => {
-    if (status === "success") {
-      console.log("[CameraAuth] Camera success - triggering fullscreen...");
-      // Use setTimeout to ensure the component is fully rendered
-      const timer = setTimeout(() => {
-        reEnterFullscreen();
-      }, 500);
-
-      return () => clearTimeout(timer);
     }
   }, [status]);
 
@@ -574,7 +601,6 @@ const CameraAuthGate = ({
       if (soundEnabled) {
         playWarningSound();
       }
-      reEnterFullscreen();
 
       // Update violations in Firestore
       if (user?.uid) {
@@ -668,17 +694,29 @@ const CameraAuthGate = ({
 
   const handleRetry = async () => {
     setStatus("checking");
+    setSetupLoading(true);
+    setCameraReady(false);
+    setPermissionError(false);
     const success = await cameraManager.startCamera();
     if (success) {
+      setStatus("success");
+      setCameraReady(true);
+      setPermissionError(false);
+      setSetupLoading(false);
       setMediaStatus({
         video: cameraManager.hasVideo(),
         audio: cameraManager.hasAudio(),
       });
       await cameraManager.startWebRTCStreaming(user);
+    } else {
+      setStatus("failed");
+      setCameraReady(false);
+      setPermissionError(true);
+      setSetupLoading(false);
     }
   };
 
-  if (status === "checking") {
+  if (setupLoading && status === "checking") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-6">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
@@ -697,7 +735,7 @@ const CameraAuthGate = ({
     );
   }
 
-  if (status === "failed") {
+  if (status === "failed" || permissionError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-6">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
@@ -1028,18 +1066,6 @@ const ContinuousCameraMonitor = ({ user }: { user: any }) => {
     };
   }, []);
 
-  // Ensure fullscreen is maintained when component mounts
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!document.fullscreenElement) {
-        console.log("[ContinuousMonitor] Ensuring fullscreen mode...");
-        reEnterFullscreen();
-      }
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, []);
-
   useEffect(() => {
     // Set up callbacks for violations and status
     cameraManager.setCallbacks(
@@ -1126,7 +1152,6 @@ const ContinuousCameraMonitor = ({ user }: { user: any }) => {
       if (soundEnabled) {
         playWarningSound();
       }
-      reEnterFullscreen();
 
       // Update violations in Firestore
       if (user?.uid) {

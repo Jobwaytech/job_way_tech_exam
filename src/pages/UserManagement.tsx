@@ -15,15 +15,8 @@ import {
 } from "lucide-react";
 import { useQuery, useQueryClient } from "react-query";
 import toast from "react-hot-toast";
-import {
-  collection,
-  getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-} from "firebase/firestore";
-import { db, createEmployeeUser, ROLES } from "../lib/firebase";
 import { motion, useScroll, useTransform } from "framer-motion";
+import { authAPI, dataAPI } from "../services/api";
 
 interface User {
   id: string;
@@ -42,10 +35,9 @@ interface User {
 }
 
 async function getUsers(): Promise<User[]> {
-  const snapshot = await getDocs(collection(db, "employees"));
-  const users = snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
+  const users = (await dataAPI.list("employees")).map((user: any) => ({
+    ...user,
+    id: user.id || user._id || user.uid,
   })) as User[];
   return users;
 }
@@ -118,7 +110,7 @@ function UserManagement() {
   // Handler for Delete
   const handleDeleteUser = async (userId: string) => {
     try {
-      await deleteDoc(doc(db, "employees", userId));
+      await dataAPI.remove("employees", userId);
       queryClient.invalidateQueries("users");
       toast.success("User deleted successfully!");
     } catch (e: any) {
@@ -143,7 +135,7 @@ function UserManagement() {
   const handleSaveEdit = async () => {
     if (!selectedUser) return;
     try {
-      await updateDoc(doc(db, "employees", selectedUser.id), {
+      await dataAPI.update("employees", selectedUser.id, {
         name: editName,
         email: editEmail,
         title: editTitle,
@@ -805,20 +797,36 @@ function UserManagement() {
                       return;
                     }
                     try {
-                      // Create Firebase Auth user with default password
                       const defaultPassword = "123456";
                       const userRole =
                         newEmail.toLowerCase() === "hr@jobwaytech.com"
-                          ? ROLES.HR
-                          : ROLES.MEMBER;
+                          ? "hr"
+                          : "user";
 
-                      await createEmployeeUser({
+                      const registered = await authAPI.register({
                         email: newEmail,
                         password: defaultPassword,
                         fullName: newName,
                         role: userRole,
-                        department: newDepartment as any,
-                        permissions: [],
+                        department: newDepartment,
+                      });
+                      if (registered?.message && !registered?.user) {
+                        throw new Error(registered.message);
+                      }
+
+                      const uid =
+                        registered?.user?.uid ||
+                        registered?.user?._id ||
+                        registered?.user?.id;
+
+                      await dataAPI.create("employees", {
+                        uid,
+                        userId: uid,
+                        email: newEmail,
+                        name: newName,
+                        fullName: newName,
+                        role: userRole,
+                        department: newDepartment,
                         title: newTitle,
                         location: newLocation,
                         phone: newPhone ? Number(newPhone) : undefined,

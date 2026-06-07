@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect } from "react";
-import { db } from "../lib/firebase";
-import { collection, getDocs, addDoc } from "firebase/firestore";
+import { dataAPI } from "../services/api";
 import { motion } from "framer-motion";
 
 const AddingMCQs: React.FC = () => {
@@ -25,8 +24,8 @@ const AddingMCQs: React.FC = () => {
 
   useEffect(() => {
     const fetchUsers = async () => {
-      const snap = await getDocs(collection(db, "users"));
-      setUsers(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+      const usersData = await dataAPI.list("users");
+setUsers(usersData);
     };
     fetchUsers();
   }, []);
@@ -87,7 +86,7 @@ const AddingMCQs: React.FC = () => {
           assignedTo: selectedUsers,
           createdAt: new Date(),
         };
-        await addDoc(collection(db, "questions"), data);
+        await dataAPI.create("questions", data);
       }
       alert("Selected questions added and assigned to selected users!");
       setSelectedQuestions([]);
